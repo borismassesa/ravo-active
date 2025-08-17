@@ -1,0 +1,12 @@
+User-agent: *
+Allow: /
+
+# Disallow admin and private areas
+Disallow: /admin/
+Disallow: /api/
+Disallow: /_next/
+Disallow: /checkout/
+Disallow: /account/
+
+# Sitemap
+Sitemap: https://ravoactive.com/sitemap.xml
