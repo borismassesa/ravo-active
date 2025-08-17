@@ -1,23 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server'
 import nodemailer from 'nodemailer'
+import { Resend } from 'resend'
+import { prisma } from '@/lib/prisma'
 
 // Email configuration
 const NOTIFICATION_EMAIL = 'monalisaskawa69@gmail.com'
 
-// Create transporter (you'll need to configure this with your email service)
-const createTransporter = () => {
-  // For Gmail, you'll need to:
-  // 1. Enable 2-factor authentication
-  // 2. Generate an App Password
-  // 3. Use the App Password instead of your regular password
-  
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.EMAIL_USER, // Your Gmail address
-      pass: process.env.EMAIL_APP_PASSWORD, // Your Gmail App Password
-    },
-  })
+// Email service configuration
+const sendEmail = async (to: string, subject: string, html: string, text: string) => {
+  // Try Resend first (easier to set up)
+  if (process.env.RESEND_API_KEY) {
+    try {
+      const resend = new Resend(process.env.RESEND_API_KEY)
+      await resend.emails.send({
+        from: process.env.FROM_EMAIL || 'RavoActive <hello@ravoactive.com>',
+        to: [to],
+        subject,
+        html,
+        text
+      })
+      return true
+    } catch (error) {
+      console.error('Resend email failed:', error)
+    }
+  }
+
+  // Fallback to Gmail/Nodemailer
+  if (process.env.EMAIL_USER && process.env.EMAIL_APP_PASSWORD) {
+    try {
+      const transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+          user: process.env.EMAIL_USER,
+          pass: process.env.EMAIL_APP_PASSWORD,
+        },
+      })
+
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to,
+        subject,
+        html,
+        text
+      })
+      return true
+    } catch (error) {
+      console.error('Gmail email failed:', error)
+    }
+  }
+
+  return false
 }
 
 // Email template for subscription notification
@@ -249,7 +281,43 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Create timestamp
+    // Get client IP and user agent for analytics
+    const ipAddress = request.headers.get('x-forwarded-for') || 
+                     request.headers.get('x-real-ip') || 
+                     'unknown'
+    const userAgent = request.headers.get('user-agent') || 'unknown'
+
+    // Check if email already exists
+    const existingSubscription = await prisma.subscription.findUnique({
+      where: { email: email.toLowerCase().trim() }
+    })
+
+    if (existingSubscription) {
+      if (existingSubscription.status === 'ACTIVE') {
+        return NextResponse.json(
+          { error: 'This email is already subscribed to our waitlist!' },
+          { status: 400 }
+        )
+      } else {
+        // Reactivate subscription if it was unsubscribed
+        await prisma.subscription.update({
+          where: { email: email.toLowerCase().trim() },
+          data: { status: 'ACTIVE', subscribedAt: new Date() }
+        })
+      }
+    } else {
+      // Create new subscription
+      await prisma.subscription.create({
+        data: {
+          email: email.toLowerCase().trim(),
+          ipAddress,
+          userAgent,
+          source: 'coming-soon-page'
+        }
+      })
+    }
+
+    // Create timestamp for emails
     const timestamp = new Date().toLocaleString('en-US', {
       timeZone: 'America/Toronto',
       year: 'numeric',
@@ -260,41 +328,80 @@ export async function POST(request: NextRequest) {
       second: '2-digit'
     })
 
-    // Check if email service is configured
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) {
-      console.log('Email service not configured. Subscription would be:', {
-        email,
-        timestamp,
-        notificationSentTo: NOTIFICATION_EMAIL
-      })
+    // Get total subscription count for analytics
+    const totalSubscriptions = await prisma.subscription.count({
+      where: { status: 'ACTIVE' }
+    })
+
+    // Send email notifications
+    let emailSent = false
+    try {
+      // Create email templates
+      const notificationEmail = createSubscriptionEmail(email, timestamp)
+      const welcomeEmail = createWelcomeEmail(email)
+
+      // If no email service is configured, just log the emails
+      if (!process.env.RESEND_API_KEY && !process.env.EMAIL_USER) {
+        console.log('\n🎉 NEW SUBSCRIPTION NOTIFICATION:')
+        console.log('=================================')
+        console.log(`📧 Admin Email: ${notificationEmail.to}`)
+        console.log(`📧 Subscriber: ${email}`)
+        console.log(`⏰ Time: ${timestamp}`)
+        console.log(`📊 Total Subscriptions: ${totalSubscriptions}`)
+        console.log('=================================\n')
+        emailSent = true // Consider it "sent" for logging purposes
+      } else {
+        // Try to send actual emails
+        const adminEmailSent = await sendEmail(
+          notificationEmail.to,
+          notificationEmail.subject,
+          notificationEmail.html,
+          notificationEmail.text
+        )
+
+        const welcomeEmailSent = await sendEmail(
+          welcomeEmail.to,
+          welcomeEmail.subject,
+          welcomeEmail.html,
+          welcomeEmail.text
+        )
+
+        emailSent = adminEmailSent || welcomeEmailSent
+        
+        if (adminEmailSent) {
+          console.log(`✅ Admin notification sent for: ${email}`)
+        }
+        if (welcomeEmailSent) {
+          console.log(`✅ Welcome email sent to: ${email}`)
+        }
+      }
       
-      return NextResponse.json({ 
-        success: true, 
-        message: 'Subscription successful!' 
-      })
+    } catch (emailError) {
+      console.error('Email sending failed:', emailError)
+      // Don't fail the whole request if email fails
     }
 
-    // Create transporter
-    const transporter = createTransporter()
-
-    // Send notification email to admin
-    const notificationEmail = createSubscriptionEmail(email, timestamp)
-    await transporter.sendMail(notificationEmail)
-
-    // Send welcome email to subscriber
-    const welcomeEmail = createWelcomeEmail(email)
-    await transporter.sendMail(welcomeEmail)
-
     // Log successful subscription
-    console.log(`New subscription: ${email} at ${timestamp}`)
+    console.log(`New subscription: ${email} at ${timestamp} (Total: ${totalSubscriptions})`)
 
     return NextResponse.json({ 
       success: true, 
-      message: 'Thank you for subscribing! Check your email for confirmation.' 
+      message: emailSent 
+        ? 'Thank you for subscribing! Check your email for confirmation.' 
+        : 'Thank you for subscribing!',
+      totalSubscriptions
     })
 
   } catch (error) {
     console.error('Subscription error:', error)
+    
+    // Handle Prisma unique constraint error
+    if (error instanceof Error && error.message.includes('Unique constraint')) {
+      return NextResponse.json(
+        { error: 'This email is already subscribed!' },
+        { status: 400 }
+      )
+    }
     
     return NextResponse.json(
       { error: 'Something went wrong. Please try again.' },
