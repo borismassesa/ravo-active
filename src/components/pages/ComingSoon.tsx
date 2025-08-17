@@ -211,7 +211,7 @@ const ComingSoon = () => {
   const seconds = Math.floor((timeLeft % (1000 * 60)) / 1000)
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black relative">
+    <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black relative w-full overflow-x-hidden">
       {/* Top Logo - Responsive positioning */}
       <motion.div
         initial={{ opacity: 0 }}
@@ -230,7 +230,7 @@ const ComingSoon = () => {
       </motion.div>
 
       {/* Main Layout */}
-      <div className="relative z-10 min-h-screen flex items-center w-full">
+      <div className="relative z-10 w-full py-8 md:py-16 lg:py-0 lg:min-h-screen lg:flex lg:items-center">
         <div className="w-full px-4 sm:px-6 md:px-8 lg:px-12 xl:px-16">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 md:gap-12 lg:gap-16 items-center pt-20 md:pt-0 max-w-7xl mx-auto">
             
