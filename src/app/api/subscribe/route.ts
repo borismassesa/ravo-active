@@ -11,7 +11,7 @@ const createTransporter = () => {
   // 2. Generate an App Password
   // 3. Use the App Password instead of your regular password
   
-  return nodemailer.createTransporter({
+  return nodemailer.createTransport({
     service: 'gmail',
     auth: {
       user: process.env.EMAIL_USER, // Your Gmail address
